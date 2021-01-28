@@ -11,6 +11,7 @@
 //	if err != nil {
 //		panic(err)
 //	}
+//
 //	stats := pinger.Statistics() // get send/receive/rtt stats
 //
 // Here is an example that emulates the traditional UNIX ping command:
