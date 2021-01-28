@@ -13,6 +13,7 @@ import (
 
 func TestProcessPacket(t *testing.T) {
 	pinger := makeTestPinger()
+	pinger.TOS = 0x26
 	shouldBe1 := 0
 	// this function should be called
 	pinger.OnRecv = func(pkt *Packet) {

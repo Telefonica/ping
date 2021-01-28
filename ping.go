@@ -123,6 +123,9 @@ type Pinger struct {
 	// interrupted.
 	Count int
 
+	// TOS value
+	TOS int
+
 	// Debug runs in debug mode
 	Debug bool
 
@@ -332,6 +335,11 @@ func (p *Pinger) Run() error {
 		}
 		if err = conn.IPv4PacketConn().SetControlMessage(ipv4.FlagTTL, true); runtime.GOOS != "windows" && err != nil {
 			return err
+		}
+		if p.TOS > 0 {
+			if err = conn.IPv4PacketConn().SetTOS(p.TOS); runtime.GOOS != "windows" && err != nil {
+				return err
+			}
 		}
 	} else {
 		if conn, err = p.listen(ipv6Proto[p.protocol]); err != nil {

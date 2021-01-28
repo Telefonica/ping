@@ -28,6 +28,8 @@ if err != nil {
 	panic(err)
 }
 
+// If you want to change TOS value of sent packet. 
+pinger.TOS = 0x26
 // Listen for Ctrl-C.
 c := make(chan os.Signal, 1)
 signal.Notify(c, os.Interrupt)
