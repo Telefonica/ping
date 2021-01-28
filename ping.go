@@ -51,6 +51,7 @@
 //
 // For a full ping example, see "cmd/ping/ping.go".
 //
+//
 package ping
 
 import (
