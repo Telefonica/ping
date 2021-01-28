@@ -2,4 +2,4 @@ module github.com/Telefonica/ping
 
 go 1.14
 
-require golang.org/x/net v0.0.0-20200904194848-62affa334b73
+require golang.org/x/net v0.0.0-20210119194325-5f4716e94777 // indirect
