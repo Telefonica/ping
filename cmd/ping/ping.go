@@ -31,12 +31,16 @@ Examples:
 
     # Send a privileged raw ICMP ping
     sudo ping --privileged www.google.com
+
+    # Send ICMP messages with a 100-byte payload
+    ping -s 100 1.1.1.1
 `
 
 func main() {
 	timeout := flag.Duration("t", time.Second*100000, "")
 	interval := flag.Duration("i", time.Second, "")
 	count := flag.Int("c", -1, "")
+	size := flag.Int("s", 16, "")
 	privileged := flag.Bool("privileged", false, "")
 	flag.Usage = func() {
 		fmt.Print(usage)
@@ -68,15 +72,20 @@ func main() {
 		fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v ttl=%v\n",
 			pkt.Nbytes, pkt.IPAddr, pkt.Seq, pkt.Rtt, pkt.Ttl)
 	}
+	pinger.OnDuplicateRecv = func(pkt *ping.Packet) {
+		fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v ttl=%v (DUP!)\n",
+			pkt.Nbytes, pkt.IPAddr, pkt.Seq, pkt.Rtt, pkt.Ttl)
+	}
 	pinger.OnFinish = func(stats *ping.Statistics) {
 		fmt.Printf("\n--- %s ping statistics ---\n", stats.Addr)
-		fmt.Printf("%d packets transmitted, %d packets received, %v%% packet loss\n",
-			stats.PacketsSent, stats.PacketsRecv, stats.PacketLoss)
+		fmt.Printf("%d packets transmitted, %d packets received, %d duplicates, %v%% packet loss\n",
+			stats.PacketsSent, stats.PacketsRecv, stats.PacketsRecvDuplicates, stats.PacketLoss)
 		fmt.Printf("round-trip min/avg/max/stddev = %v/%v/%v/%v\n",
 			stats.MinRtt, stats.AvgRtt, stats.MaxRtt, stats.StdDevRtt)
 	}
 
 	pinger.Count = *count
+	pinger.Size = *size
 	pinger.Interval = *interval
 	pinger.Timeout = *timeout
 	pinger.SetPrivileged(*privileged)

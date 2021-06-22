@@ -2,8 +2,10 @@ package ping
 
 import (
 	"bytes"
+	"errors"
 	"net"
 	"runtime/debug"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,7 +22,7 @@ func TestProcessPacket(t *testing.T) {
 		shouldBe1++
 	}
 
-	data := append(timeToBytes(time.Now()), intToBytes(pinger.Tracker)...)
+	data := append(timeToBytes(time.Now()), uintToBytes(pinger.Tracker)...)
 	if remainSize := pinger.Size - timeSliceLength - trackerLength; remainSize > 0 {
 		data = append(data, bytes.Repeat([]byte{1}, remainSize)...)
 	}
@@ -30,6 +32,7 @@ func TestProcessPacket(t *testing.T) {
 		Seq:  pinger.sequence,
 		Data: data,
 	}
+	pinger.awaitingSequences[pinger.sequence] = struct{}{}
 
 	msg := &icmp.Message{
 		Type: ipv4.ICMPTypeEchoReply,
@@ -58,7 +61,7 @@ func TestProcessPacket_IgnoreNonEchoReplies(t *testing.T) {
 		shouldBe0++
 	}
 
-	data := append(timeToBytes(time.Now()), intToBytes(pinger.Tracker)...)
+	data := append(timeToBytes(time.Now()), uintToBytes(pinger.Tracker)...)
 	if remainSize := pinger.Size - timeSliceLength - trackerLength; remainSize > 0 {
 		data = append(data, bytes.Repeat([]byte{1}, remainSize)...)
 	}
@@ -97,7 +100,7 @@ func TestProcessPacket_IDMismatch(t *testing.T) {
 		shouldBe0++
 	}
 
-	data := append(timeToBytes(time.Now()), intToBytes(pinger.Tracker)...)
+	data := append(timeToBytes(time.Now()), uintToBytes(pinger.Tracker)...)
 	if remainSize := pinger.Size - timeSliceLength - trackerLength; remainSize > 0 {
 		data = append(data, bytes.Repeat([]byte{1}, remainSize)...)
 	}
@@ -135,7 +138,7 @@ func TestProcessPacket_TrackerMismatch(t *testing.T) {
 		shouldBe0++
 	}
 
-	data := append(timeToBytes(time.Now()), intToBytes(999)...)
+	data := append(timeToBytes(time.Now()), uintToBytes(999)...)
 	if remainSize := pinger.Size - timeSliceLength - trackerLength; remainSize > 0 {
 		data = append(data, bytes.Repeat([]byte{1}, remainSize)...)
 	}
@@ -169,7 +172,7 @@ func TestProcessPacket_LargePacket(t *testing.T) {
 	pinger := makeTestPinger()
 	pinger.Size = 4096
 
-	data := append(timeToBytes(time.Now()), intToBytes(pinger.Tracker)...)
+	data := append(timeToBytes(time.Now()), uintToBytes(pinger.Tracker)...)
 	if remainSize := pinger.Size - timeSliceLength - trackerLength; remainSize > 0 {
 		data = append(data, bytes.Repeat([]byte{1}, remainSize)...)
 	}
@@ -373,19 +376,16 @@ func TestStatisticsSunny(t *testing.T) {
 	AssertEqualStrings(t, "localhost", p.Addr())
 
 	p.PacketsSent = 10
-	p.PacketsRecv = 10
-	p.rtts = []time.Duration{
-		time.Duration(1000),
-		time.Duration(1000),
-		time.Duration(1000),
-		time.Duration(1000),
-		time.Duration(1000),
-		time.Duration(1000),
-		time.Duration(1000),
-		time.Duration(1000),
-		time.Duration(1000),
-		time.Duration(1000),
-	}
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
 
 	stats := p.Statistics()
 	if stats.PacketsRecv != 10 {
@@ -419,19 +419,16 @@ func TestStatisticsLossy(t *testing.T) {
 	AssertEqualStrings(t, "localhost", p.Addr())
 
 	p.PacketsSent = 20
-	p.PacketsRecv = 10
-	p.rtts = []time.Duration{
-		time.Duration(10),
-		time.Duration(1000),
-		time.Duration(1000),
-		time.Duration(10000),
-		time.Duration(1000),
-		time.Duration(800),
-		time.Duration(1000),
-		time.Duration(40),
-		time.Duration(100000),
-		time.Duration(1000),
-	}
+	p.updateStatistics(&Packet{Rtt: time.Duration(10)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(10000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(800)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(40)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(100000)})
+	p.updateStatistics(&Packet{Rtt: time.Duration(1000)})
 
 	stats := p.Statistics()
 	if stats.PacketsRecv != 10 {
@@ -472,6 +469,7 @@ func makeTestPinger() *Pinger {
 }
 
 func AssertNoError(t *testing.T, err error) {
+	t.Helper()
 	if err != nil {
 		t.Errorf("Expected No Error but got %s, Stack:\n%s",
 			err, string(debug.Stack()))
@@ -479,6 +477,7 @@ func AssertNoError(t *testing.T, err error) {
 }
 
 func AssertError(t *testing.T, err error, info string) {
+	t.Helper()
 	if err == nil {
 		t.Errorf("Expected Error but got %s, %s, Stack:\n%s",
 			err, info, string(debug.Stack()))
@@ -486,6 +485,7 @@ func AssertError(t *testing.T, err error, info string) {
 }
 
 func AssertEqualStrings(t *testing.T, expected, actual string) {
+	t.Helper()
 	if expected != actual {
 		t.Errorf("Expected %s, got %s, Stack:\n%s",
 			expected, actual, string(debug.Stack()))
@@ -493,6 +493,7 @@ func AssertEqualStrings(t *testing.T, expected, actual string) {
 }
 
 func AssertNotEqualStrings(t *testing.T, expected, actual string) {
+	t.Helper()
 	if expected == actual {
 		t.Errorf("Expected %s, got %s, Stack:\n%s",
 			expected, actual, string(debug.Stack()))
@@ -500,12 +501,14 @@ func AssertNotEqualStrings(t *testing.T, expected, actual string) {
 }
 
 func AssertTrue(t *testing.T, b bool) {
+	t.Helper()
 	if !b {
 		t.Errorf("Expected True, got False, Stack:\n%s", string(debug.Stack()))
 	}
 }
 
 func AssertFalse(t *testing.T, b bool) {
+	t.Helper()
 	if b {
 		t.Errorf("Expected False, got True, Stack:\n%s", string(debug.Stack()))
 	}
@@ -520,7 +523,7 @@ func BenchmarkProcessPacket(b *testing.B) {
 	pinger.id = 123
 	pinger.Tracker = 456
 
-	t := append(timeToBytes(time.Now()), intToBytes(pinger.Tracker)...)
+	t := append(timeToBytes(time.Now()), uintToBytes(pinger.Tracker)...)
 	if remainSize := pinger.Size - timeSliceLength - trackerLength; remainSize > 0 {
 		t = append(t, bytes.Repeat([]byte{1}, remainSize)...)
 	}
@@ -548,4 +551,185 @@ func BenchmarkProcessPacket(b *testing.B) {
 	for k := 0; k < b.N; k++ {
 		pinger.processPacket(&pkt)
 	}
+}
+
+func TestProcessPacket_IgnoresDuplicateSequence(t *testing.T) {
+	pinger := makeTestPinger()
+	// pinger.protocol = "icmp" // ID is only checked on "icmp" protocol
+	shouldBe0 := 0
+	dups := 0
+
+	// this function should not be called because the tracker is mismatched
+	pinger.OnRecv = func(pkt *Packet) {
+		shouldBe0++
+	}
+
+	pinger.OnDuplicateRecv = func(pkt *Packet) {
+		dups++
+	}
+
+	data := append(timeToBytes(time.Now()), uintToBytes(pinger.Tracker)...)
+	if remainSize := pinger.Size - timeSliceLength - trackerLength; remainSize > 0 {
+		data = append(data, bytes.Repeat([]byte{1}, remainSize)...)
+	}
+
+	body := &icmp.Echo{
+		ID:   123,
+		Seq:  0,
+		Data: data,
+	}
+	// register the sequence as sent
+	pinger.awaitingSequences[0] = struct{}{}
+
+	msg := &icmp.Message{
+		Type: ipv4.ICMPTypeEchoReply,
+		Code: 0,
+		Body: body,
+	}
+
+	msgBytes, _ := msg.Marshal(nil)
+
+	pkt := packet{
+		nbytes: len(msgBytes),
+		bytes:  msgBytes,
+		ttl:    24,
+	}
+
+	err := pinger.processPacket(&pkt)
+	AssertNoError(t, err)
+	// receive a duplicate
+	err = pinger.processPacket(&pkt)
+	AssertNoError(t, err)
+
+	AssertTrue(t, shouldBe0 == 1)
+	AssertTrue(t, dups == 1)
+	AssertTrue(t, pinger.PacketsRecvDuplicates == 1)
+}
+
+type testPacketConn struct{}
+
+func (c testPacketConn) Close() error                      { return nil }
+func (c testPacketConn) ICMPRequestType() icmp.Type        { return ipv4.ICMPTypeEcho }
+func (c testPacketConn) SetFlagTTL() error                 { return nil }
+func (c testPacketConn) SetReadDeadline(t time.Time) error { return nil }
+
+func (c testPacketConn) ReadFrom(b []byte) (n int, ttl int, src net.Addr, err error) {
+	return 0, 0, nil, nil
+}
+
+func (c testPacketConn) WriteTo(b []byte, dst net.Addr) (int, error) {
+	return len(b), nil
+}
+
+type testPacketConnBadWrite struct {
+	testPacketConn
+}
+
+func (c testPacketConnBadWrite) WriteTo(b []byte, dst net.Addr) (int, error) {
+	return 0, errors.New("bad write")
+}
+
+func TestRunBadWrite(t *testing.T) {
+	pinger := New("127.0.0.1")
+	pinger.Count = 1
+
+	err := pinger.Resolve()
+	AssertNoError(t, err)
+
+	var conn testPacketConnBadWrite
+
+	err = pinger.run(conn)
+	AssertTrue(t, err != nil)
+
+	stats := pinger.Statistics()
+	AssertTrue(t, stats != nil)
+	if stats == nil {
+		t.FailNow()
+	}
+	AssertTrue(t, stats.PacketsSent == 0)
+	AssertTrue(t, stats.PacketsRecv == 0)
+}
+
+type testPacketConnBadRead struct {
+	testPacketConn
+}
+
+func (c testPacketConnBadRead) ReadFrom(b []byte) (n int, ttl int, src net.Addr, err error) {
+	return 0, 0, nil, errors.New("bad read")
+}
+
+func TestRunBadRead(t *testing.T) {
+	pinger := New("127.0.0.1")
+	pinger.Count = 1
+
+	err := pinger.Resolve()
+	AssertNoError(t, err)
+
+	var conn testPacketConnBadRead
+
+	err = pinger.run(conn)
+	AssertTrue(t, err != nil)
+
+	stats := pinger.Statistics()
+	AssertTrue(t, stats != nil)
+	if stats == nil {
+		t.FailNow()
+	}
+	AssertTrue(t, stats.PacketsSent == 1)
+	AssertTrue(t, stats.PacketsRecv == 0)
+}
+
+type testPacketConnOK struct {
+	testPacketConn
+	writeDone int32
+	buf       []byte
+	dst       net.Addr
+}
+
+func (c *testPacketConnOK) WriteTo(b []byte, dst net.Addr) (int, error) {
+	c.buf = make([]byte, len(b))
+	c.dst = dst
+	n := copy(c.buf, b)
+	atomic.StoreInt32(&c.writeDone, 1)
+	return n, nil
+}
+
+func (c *testPacketConnOK) ReadFrom(b []byte) (n int, ttl int, src net.Addr, err error) {
+	if atomic.LoadInt32(&c.writeDone) == 0 {
+		return 0, 0, nil, nil
+	}
+	msg, err := icmp.ParseMessage(ipv4.ICMPTypeEcho.Protocol(), c.buf)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	msg.Type = ipv4.ICMPTypeEchoReply
+	buf, err := msg.Marshal(nil)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	time.Sleep(10 * time.Millisecond)
+	return copy(b, buf), 64, c.dst, nil
+}
+
+func TestRunOK(t *testing.T) {
+	pinger := New("127.0.0.1")
+	pinger.Count = 1
+
+	err := pinger.Resolve()
+	AssertNoError(t, err)
+
+	conn := new(testPacketConnOK)
+
+	err = pinger.run(conn)
+	AssertTrue(t, err == nil)
+
+	stats := pinger.Statistics()
+	AssertTrue(t, stats != nil)
+	if stats == nil {
+		t.FailNow()
+	}
+	AssertTrue(t, stats.PacketsSent == 1)
+	AssertTrue(t, stats.PacketsRecv == 1)
+	AssertTrue(t, stats.MinRtt >= 10*time.Millisecond)
+	AssertTrue(t, stats.MinRtt <= 12*time.Millisecond)
 }
